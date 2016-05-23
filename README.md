@@ -22,8 +22,8 @@ make
 ```
 
 To run the application, type
-'''
+```
 ANN
-'''
+```
 
 The number and size of hidden layers can be changed in `ANN.cc`. The default hyperparameters should lead to ~0.98 accuracy after 10 epochs. 
