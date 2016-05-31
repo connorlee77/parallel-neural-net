@@ -54,62 +54,63 @@ ANN::ANN(int *shape, int layer_count) {
 	this->shape = shape;
 	this->layer_count = layer_count;
 
-	this->weights = new float*[layer_count];
-	this->bias = new float*[layer_count];
-	this->delta_weights = new float*[layer_count];
-	this->delta_bias = new float*[layer_count];
+	int size = 0;
+	this->bias_index = new int[layer_count - 1];
+	this->io_index = new int[layer_count];
+	for(int i = 0; i < layer_count; i++) {
+		io_index[i] = size;	
+		size += shape[i];
+	}
+
+	this->bias_size = 0;
+	for(int i = 1; i < layer_count; i++) {
+		this->bias_index[i - 1] = bias_size;
+		bias_size += shape[i];
+	}
+
+	this->network_size = size;
+	assert(this->bias_size ==this->network_size - shape[0]);
+
+	this->sum_weights = 0;
+	this->weight_shapes = new int[layer_count - 1];
+	this->weight_index = new int[layer_count - 1];
+
+	for(int layer = 0; layer < layer_count - 1; layer++) {
+		int curr_size = shape[layer];
+		int next_size = shape[layer + 1];
+		int total_size = curr_size * next_size;
+		
+		this->weight_index[layer] = this->sum_weights;
+		this->sum_weights += total_size;
+		this->weight_shapes[layer] = total_size;
+	}
+
+	gpuErrChk( cudaMalloc((void **) &this->delta_w, sum_weights * sizeof(float)) );
+	gpuErrChk( cudaMalloc((void **) &this->weights, sum_weights * sizeof(float)) );
+
+	gpuErrChk( cudaMalloc((void **) &this->bias, this->bias_size * sizeof(float)) );
+	gpuErrChk( cudaMalloc((void **) &this->delta_b, this->bias_size * sizeof(float)) );
 
 
-	initWeights(this->weights, this->bias, this->delta_weights, this->delta_bias, layer_count, shape);
+	initWeights(layer_count);
 
-	this->deltas = new float*[this->layer_count];
-	this->input_layers = new float*[layer_count];
-	this->output_layers = new float*[layer_count];
-	initLayers(this->input_layers, this->output_layers, this->deltas, layer_count, shape);
+	gpuErrChk( cudaMalloc((void **) &(this->deltas), (this->network_size) * sizeof(float)) );
+	gpuErrChk( cudaMalloc((void **) &(this->input_layers), (this->network_size) * sizeof(float)) );
+	gpuErrChk( cudaMalloc((void **) &(this->output_layers), (this->network_size) * sizeof(float)) );
 }
 
 ANN::~ANN() {
+	gpuErrChk( cudaFree(this->delta_w) );
+	gpuErrChk( cudaFree(this->delta_b) );
+	gpuErrChk( cudaFree(this->weights) );
+	gpuErrChk( cudaFree(this->bias) );
+	gpuErrChk( cudaFree(this->deltas) );
+	gpuErrChk( cudaFree(this->input_layers) );
+	gpuErrChk( cudaFree(this->output_layers) );
 
-
-	for (int layer = 0; layer < this->layer_count - 1; layer++) {
-		cudaFree(this->weights[layer]);
-		cudaFree(this->delta_weights[layer]);
-	}
-
-	delete [] this->weights;
-	delete [] this->delta_weights;
-
-
-	for (int layer = 0; layer < layer_count - 1; layer++) {
-		cudaFree(this->bias[layer]);
-		cudaFree(this->delta_bias[layer]);
-		cudaFree(this->input_layers[layer]);
-		cudaFree(this->output_layers[layer]);
-		cudaFree(this->deltas[layer]);
-	}
-
-	cudaFree(input_layers[this->layer_count - 1]);
-	cudaFree(output_layers[this->layer_count - 1]);
-	cudaFree(this->deltas[this->layer_count - 1]);
-
-	delete [] this->bias;
-	delete [] this->delta_bias;
-
-	delete [] this->input_layers;
-	delete [] this->output_layers;
-}
-
-
-void ANN::initLayers(float **input_layers, float **output_layers, float **deltas, int layer_count, int *shape) {
-
-	for (int layer = 0; layer < layer_count; layer++) {
-
-		int layer_shape = shape[layer];
-
-		gpuErrChk( cudaMalloc((void **) &deltas[layer], layer_shape * sizeof(float)) );
-		gpuErrChk( cudaMalloc((void **) &input_layers[layer], layer_shape * sizeof(float)) );
-		gpuErrChk( cudaMalloc((void **) &output_layers[layer], layer_shape * sizeof(float)) );
-	}
+	free(this->bias_index);
+	free(this->weight_shapes);
+	free(this->weight_index);
 }
 
 void printDevice(float *dev, int size) {
@@ -122,7 +123,7 @@ void printDevice(float *dev, int size) {
 	free(test);
 }
 
-void ANN::initWeights(float **weights, float **bias, float **delta_w, float **delta_b, int layer_count, int *shape) {
+void ANN::initWeights(int layer_count) {
 
 	curandGenerator_t gen;
 	CURAND_CALL( curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT) );
@@ -131,51 +132,42 @@ void ANN::initWeights(float **weights, float **bias, float **delta_w, float **de
 	// Fill layer weights
 	for (int layer = 0; layer < layer_count - 1; layer++) {
 
-		int curr_size = shape[layer];
-		int next_size = shape[layer + 1];
+		int layer_size = this->weight_shapes[layer];
+		int index = this->weight_index[layer];
 
-		gpuErrChk( cudaMalloc((void **) &delta_w[layer], curr_size * next_size * sizeof(float)) );
-		gpuErrChk( cudaMalloc((void **) &weights[layer], curr_size * next_size * sizeof(float)) );
-
-		float std = 1.0 / sqrt(next_size);
-		CURAND_CALL( curandGenerateNormal(gen, weights[layer], curr_size * next_size * sizeof(float), 0.0, std) );
-
+		float std = 1.0 / sqrt(this->shape[layer + 1]);
+		CURAND_CALL( curandGenerateNormal(gen, &(this->weights[index]), layer_size * sizeof(float), 0.0, std) );
 	}
-
 
 	// Fill bias weights
-	for (int layer = 0; layer < layer_count - 1; layer++) {
-
-		int layer_size = shape[layer + 1];
-
-		gpuErrChk( cudaMalloc((void **) &bias[layer], layer_size * sizeof(float)) );
-		gpuErrChk( cudaMalloc((void **) &delta_b[layer], layer_size * sizeof(float)) );
-
-		CURAND_CALL( curandGenerateNormal(gen, bias[layer], layer_size * sizeof(float), 0.0, 1) );
-
-	}
-
+	CURAND_CALL( curandGenerateNormal(gen, this->bias, (this->bias_size) * sizeof(float), 0.0, 1) );
+	
 	CURAND_CALL(curandDestroyGenerator(gen));
 }
 
 float* ANN::feedforward(float *input_data, int size) {
 
-	float **input_layer = this->input_layers;
-	float **output_layer = this->output_layers;
+	float *input_layer = this->input_layers;
+	float *output_layer = this->output_layers;
 
-	gpuErrChk( cudaMemcpy(input_layer[0], input_data, sizeof(float) * size, cudaMemcpyHostToDevice) );
-	gpuErrChk( cudaMemcpy(output_layer[0], input_data, sizeof(float) * size, cudaMemcpyHostToDevice) );
+	gpuErrChk( cudaMemcpy(input_layer, input_data, sizeof(float) * size, cudaMemcpyHostToDevice) );
+	gpuErrChk( cudaMemcpy(output_layer, input_data, sizeof(float) * size, cudaMemcpyHostToDevice) );
 
 	for (int i = 1; i < this->layer_count; i++) {
 
 		// Compute x * w + b
-		gpuErrChk( cudaMemset(input_layer[i], 0, sizeof(float) * (this->shape[i])) );
+		int curr_io_index = this->io_index[i];
+		int prev_io_index = this->io_index[i - 1];
+		int prev_weight_index = this->weight_index[i - 1];
+		int prev_bias_index = this->bias_index[i - 1];
 
-		dotVectorToMatrix(blocks, threads, input_layer[i], output_layer[i - 1], this->weights[i - 1], this->shape[i - 1], this->shape[i - 1], this->shape[i]);
-		addVectors(blocks, threads, output_layer[i], input_layer[i], this->bias[i - 1], this->shape[i]);
+		gpuErrChk( cudaMemset(&input_layer[curr_io_index], 0, sizeof(float) * (this->shape[i])) );
+
+		dotVectorToMatrix(blocks, threads, &input_layer[curr_io_index], &output_layer[prev_io_index], &this->weights[prev_weight_index], this->shape[i - 1], this->shape[i - 1], this->shape[i]);
+		addVectors(blocks, threads, &output_layer[curr_io_index], &input_layer[curr_io_index], &this->bias[prev_bias_index], this->shape[i]);
 	}
 
-	return output_layer[this->layer_count - 1];
+	return &output_layer[this->io_index[this->layer_count - 1]];
 }
 
 
@@ -184,20 +176,31 @@ void ANN::backpropogate(float label) {
 	int last_layer = this->layer_count - 1;
 
 	// Calculate last layer delta
-	delta(this->deltas[last_layer], this->output_layers[last_layer], label, this->shape[last_layer]);
+	int last_layer_index = this->io_index[last_layer];
+	delta(&this->deltas[last_layer_index], &this->output_layers[last_layer_index], label, this->shape[last_layer]);
 
 	for (int i = last_layer - 1; i >= 0; i--) {
 
+		int next_io_index = this->io_index[i + 1];
+		int curr_io_index = this->io_index[i];
+		int curr_weight_index = this->weight_index[i];
+
 		calculateDeltas(blocks, threads,
-		                this->deltas[i], this->deltas[i + 1],
-		                this->weights[i], this->input_layers[i],
+		                &this->deltas[curr_io_index], &this->deltas[next_io_index],
+		                &this->weights[curr_weight_index], &this->input_layers[curr_io_index],
 		                this->shape[i + 1], this->shape[i],
 		                this->shape[i + 1]);
 	}
 
 	for (int i = last_layer; i > 0; i--) {
-		dotVectorTransposeToVector(blocks, threads, this->delta_weights[i - 1], this->output_layers[i - 1], this->deltas[i], this->shape[i - 1], this->shape[i]);
-		gpuErrChk( cudaMemcpy(this->delta_bias[i - 1], this->deltas[i], sizeof(float) * (this->shape[i]), cudaMemcpyDeviceToDevice) );
+		
+		int curr_io_index = this->io_index[i];
+		int prev_io_index = this->io_index[i - 1];
+		int prev_weight_index = this->weight_index[i - 1];
+		int prev_bias_index = this->bias_index[i - 1];
+
+		dotVectorTransposeToVector(blocks, threads, &this->delta_w[prev_weight_index], &this->output_layers[prev_io_index], &this->deltas[curr_io_index], this->shape[i - 1], this->shape[i]);
+		gpuErrChk( cudaMemcpy(&this->delta_b[prev_bias_index], &this->deltas[curr_io_index], sizeof(float) * (this->shape[i]), cudaMemcpyDeviceToDevice) );
 	}
 }
 
@@ -214,12 +217,13 @@ void ANN::sgd(float **training_data, float* training_labels, float **testing_dat
 			this->backpropogate(label);			
 			
 			for (int layer = 0; layer < this->layer_count - 1; layer++) {
-				updateBias(blocks, threads, this->bias[layer], gamma, this->delta_bias[layer], this->shape[layer + 1]);
-				updateWeights(blocks, threads, this->weights[layer], gamma, this->delta_weights[layer], this->shape[layer], this->shape[layer + 1], alpha);
-
 				
-			}
+				int curr_bias_index = this->bias_index[layer];
+				int curr_weight_index = this->weight_index[layer];
 
+				updateBias(blocks, threads, &this->bias[curr_bias_index], gamma, &this->delta_b[curr_bias_index], this->shape[layer + 1]);
+				updateWeights(blocks, threads, &this->weights[curr_weight_index], gamma, &this->delta_w[curr_weight_index], this->shape[layer], this->shape[layer + 1], alpha);
+			}
 			
 			if (i % 10000 == 0)
 				printf("%d\n", i);
@@ -266,11 +270,12 @@ int main(int argc, char const *argv[]) {
 	float* testLabeldata = read_mnist_labels(PATH + testLabels, 10000);
 	float** testImagedata = read_mnist_images(PATH + testImages, 10000, 784);
 
-	int size = 3;
+	int size = 4;
 	int *shape = new int[size];
 	shape[0] = 784;
 	shape[1] = 300;
-	shape[2] = 10;
+	shape[2] = 50;
+	shape[3] = 10;
 
 
 	ANN *ann = new ANN(shape, size);

@@ -21,16 +21,23 @@ public:
 
 	int *shape;
 	int layer_count;
+	int sum_weights;
+	int bias_size;
 
 	float *weights;
 	float *bias;
-
-	float *delta_weights;
-	float *delta_bias;
+	int *weight_index;
+	int *bias_index;
+	int * io_index;
+	
 	float *deltas;
 	float *input_layers;
 	float *output_layers;
+	int *weight_shapes;
+	int network_size;
 
+	float *delta_w;
+	float *delta_b;
 	/**
 	 * @param shape					array 	[input, hidden ... , output]
 	 * @param layer_count			int 	layer count
@@ -41,10 +48,8 @@ public:
 	ANN(int *shape, int layer_count);
 
 	~ANN();
-		
-	void initLayers(float **input_layers, float **output_layers, float **deltas, int layer_count, int *shape);
-	
-	void ANN::initWeights(float **weights, float **bias, float **delta_w, float **delta_b, int layer_count, int *shape);
+			
+	void ANN::initWeights(int layer_count);
 	
 	float *feedforward(float *array, int size);
 	void backpropogate(float label);
