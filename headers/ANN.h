@@ -33,11 +33,22 @@ public:
 	float *deltas;
 	float *input_layers;
 	float *output_layers;
+	float *input_host;
+	float *labels;
+
 	int *weight_shapes;
 	int network_size;
+	int normal_size;
 
 	float *delta_w;
 	float *delta_b;
+
+	float *eval_input;
+	float *eval_output;
+	float *host_weights;
+	float *host_bias;
+	int *normal_io_index;
+	
 	/**
 	 * @param shape					array 	[input, hidden ... , output]
 	 * @param layer_count			int 	layer count
@@ -51,12 +62,13 @@ public:
 			
 	void ANN::initWeights(int layer_count);
 	
-	float *feedforward(float *array, int size);
-	void backpropogate(float label);
+	float *feedforward(int data_idx, cudaStream_t s);
+	float *cpu_feedforward(float *input_data, int size);
+	void backpropogate(float label, int data_idx, cudaStream_t s);
 
 	void sgd(float **training_data, float* training_labels, float **testing_data, float* testing_labels, int size, float gamma, float alpha, int epochs, int input_data_size, int test_size);
 
-	int ANN::evaluate(float **testing_data, float *testing_labels, int size, int input_data_size);
+	int evaluate(float **testing_data, float *testing_labels, int size, int input_data_size);
 };
 
 #endif // ANN_H
