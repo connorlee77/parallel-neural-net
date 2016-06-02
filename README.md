@@ -62,12 +62,12 @@ The computation time used for one epoch (a full pass over the training set) is s
 
 |Layer Structure				| GPU	| CPU  |
 |-------------------------------|-------|------|
-|[784, 300, 10]					| 28.5s | 32.0s|
-|[784, 300, 300, 10]			| 42.5s | 44.3s|
-|[784, 800, 300, 300, 10]		| 120s	| 136s |
-|[784, 800, 800, 300, 10]		| 181s 	| 223s |
-|[784, 800, 800, 800, 10]		| 225s	| 284s |
-|[784, 800, 800, 800, 800, 10]	| 286s	| 386s |
+|`784, 300, 10`					| 28.5s | 32.0s|
+|`784, 300, 300, 10`			| 42.5s | 44.3s|
+|`784, 800, 300, 300, 10`		| 120s	| 136s |
+|`784, 800, 800, 300, 10`		| 181s 	| 223s |
+|`784, 800, 800, 800, 10`		| 225s	| 284s |
+|`784, 800, 800, 800, 800, 10`	| 286s	| 386s |
 
 From the table above, it is clear that our initial hypothesis was correct. The GPU and CPU code had relatively similar times for networks of less and smaller hidden layers. As the layers and size increase, the difference between the GPU and CPU times also increase. 
 
