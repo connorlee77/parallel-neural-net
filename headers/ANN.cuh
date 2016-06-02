@@ -1,10 +1,6 @@
 #ifndef ANN_CUH
 #define ANN_CUH
 
-
-/* TODO: This is a CUDA header file.
-If you have any functions in your .cu file that need to be
-accessed from the outside, declare them here */
 void dotVectorToMatrix(unsigned int maxBlocks, unsigned int threadsPerBlock, float *ans, float *vector, float *matrix, int x_col_dim, int w_row_dim, int w_col_dim, cudaStream_t stream);
 void addVectors(unsigned int maxBlocks, unsigned int threadsPerBlock, float *output, float *input, float *arr, int size, cudaStream_t stream);
 

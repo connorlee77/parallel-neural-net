@@ -15,7 +15,6 @@
 #include <string>
 #include <random>
 
-
 void cpu_dotVectorToMatrix(float *ans, float *vector, float *matrix, int x_col_dim, int w_row_dim, int w_col_dim) {
 
 	assert(x_col_dim == w_row_dim);

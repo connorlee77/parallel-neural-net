@@ -38,17 +38,20 @@ inline void gpuAssert(
 #define CUDA_CALL(x) do { if((x)!=cudaSuccess) { printf("Error at %s:%d\n",__FILE__,__LINE__); exit( EXIT_FAILURE);}} while(0)
 #define CURAND_CALL(x) do { if((x)!=CURAND_STATUS_SUCCESS) { printf("Error at %s:%d\n",__FILE__,__LINE__); exit( EXIT_FAILURE);}} while(0)
 
+/**
+ *  Set number of blocks, threads, and streams here.
+ *
+ *  The current setting seems to be most optimal.
+ */
 unsigned int blocks = 512;
 unsigned int threads = 200;
 const int sb_count = 8;
 const int batch_size = 150;
+
 /**
-	 * @param shape					array 	[input, hidden ... , output]
-	 * @param layer_count			int 	layer count
-	 * @param cost_function 		string	"quadratic, entropy"
-	 * @param activation_function	string 	"ReLu, softmax, tanh"
-	 * @param regularization		int 	"0 - None, 1 - L1, 2 - L2"
-	 */
+ * Constructor: Takes in an array of the layer shapes
+ * and the layer count. All needed memory is allocated here.
+ */
 ANN::ANN(int *shape, int layer_count) {
 
 	this->shape = shape;
@@ -56,9 +59,14 @@ ANN::ANN(int *shape, int layer_count) {
 
 	int size = 0;
 	int normal_size = 0;
+
+	// 1D array cannot represent a non-grid shape 2D array well. 
+	// Need to calculate and store the indices for the weights, biases, 
+	// and inputs. 
 	this->bias_index = new int[layer_count - 1];
 	this->io_index = new int[layer_count];
 	this->normal_io_index = new int[layer_count];
+	
 	for (int i = 0; i < layer_count; i++) {
 		io_index[i] = size;
 		normal_io_index[i] = normal_size;
@@ -68,6 +76,9 @@ ANN::ANN(int *shape, int layer_count) {
 		else
 			size += shape[i];
 	}
+
+	// network size includes memory to store a batch of input data in 
+	// input_layer and output_layer
 	this->network_size = size;
 	this->normal_size = normal_size;
 
@@ -77,9 +88,10 @@ ANN::ANN(int *shape, int layer_count) {
 		this->bias_size += shape[i];
 	}
 
-
 	assert(this->bias_size == this->network_size - shape[0] * batch_size * sb_count);
 
+	// Calculate indices for the weights which is also represented as
+	// a 1D array.
 	this->sum_weights = 0;
 	this->weight_shapes = new int[layer_count - 1];
 	this->weight_index = new int[layer_count - 1];
@@ -94,19 +106,21 @@ ANN::ANN(int *shape, int layer_count) {
 		this->weight_shapes[layer] = total_size;
 	}
 
+	// Allocate device memory
 	gpuErrChk( cudaMalloc((void **) &this->delta_w, sum_weights * sizeof(float)) );
 	gpuErrChk( cudaMalloc((void **) &this->weights, sum_weights * sizeof(float)) );
 
 	gpuErrChk( cudaMalloc((void **) &this->bias, this->bias_size * sizeof(float)) );
 	gpuErrChk( cudaMalloc((void **) &this->delta_b, this->bias_size * sizeof(float)) );
 
-
+	// Fill the weights
 	initWeights(layer_count);
 
 	gpuErrChk( cudaMalloc((void **) & (this->deltas), (this->network_size) * sizeof(float)) );
 	gpuErrChk( cudaMalloc((void **) & (this->input_layers), (this->network_size) * sizeof(float)) );
 	gpuErrChk( cudaMalloc((void **) & (this->output_layers), (this->network_size) * sizeof(float)) );
 
+	// Allocate host memory. Host memory is mainly used for the evaluation step.
 	this->input_host = (float *) malloc(sizeof(float) * shape[0] * batch_size * sb_count);
 	this->labels = (float *) malloc(sizeof(float) * batch_size * sb_count);
 
@@ -125,17 +139,25 @@ ANN::~ANN() {
 	gpuErrChk( cudaFree(this->input_layers) );
 	gpuErrChk( cudaFree(this->output_layers) );
 
-	free(this->bias_index);
-	free(this->weight_shapes);
-	free(this->weight_index);
 	free(this->input_host);
+	free(this->labels);
 
+	delete [] this->weight_shapes;
+	delete [] this->weight_index;
+	delete [] this->bias_index;
+	delete [] this->io_index;
+	delete [] this->normal_io_index;
 	delete [] this->eval_output;
 	delete [] this->eval_input;
 	delete [] this->host_weights;
 	delete [] this->host_bias;
 }
 
+/**
+ * Prints a block of memory on the device
+ * @param dev  [device memory]
+ * @param size [size of memory]
+ */
 void printDevice(float *dev, int size) {
 	float *test = (float *) malloc(sizeof(float) * size);
 	gpuErrChk( cudaMemcpy(test, dev, size * sizeof(float), cudaMemcpyDeviceToHost) );
@@ -146,6 +168,11 @@ void printDevice(float *dev, int size) {
 	free(test);
 }
 
+/**
+ * Initializes the weights of the network based on a gaussian distribution. 
+ * 
+ * @param layer_count Count of the layers in the net.
+ */
 void ANN::initWeights(int layer_count) {
 
 	curandGenerator_t gen;
@@ -168,6 +195,15 @@ void ANN::initWeights(int layer_count) {
 	CURAND_CALL(curandDestroyGenerator(gen));
 }
 
+/**
+ * Performs the feedforward algorithm. 
+ * All data stays on the gpu. Contains a multiplication 
+ * and addition kernel.
+ * 
+ * @param  data_idx index for where the current input data is located.
+ * @param  s        cuda stream
+ * @return          device memory of the prediction
+ */
 float* ANN::feedforward(int data_idx, cudaStream_t s) {
 
 	float *input_layer = this->input_layers;
@@ -194,6 +230,13 @@ float* ANN::feedforward(int data_idx, cudaStream_t s) {
 }
 
 
+/**
+ * Backpropogation algorithm
+ * 
+ * @param label    The true label
+ * @param data_idx index for where the current input data is located.
+ * @param s        cuda stream
+ */
 void ANN::backpropogate(float label, int data_idx, cudaStream_t s) {
 
 	int last_layer = this->layer_count - 1;
@@ -247,25 +290,43 @@ void ANN::backpropogate(float label, int data_idx, cudaStream_t s) {
 	}
 }
 
+/**
+ * Performs stochastic gradient descent
+ * 
+ * @param training_data   [Entire set of training data]
+ * @param training_labels [Entire set of training labels]
+ * @param testing_data    [Entire set of testing data]
+ * @param testing_labels  [Entire set of testing labels]
+ * @param size            [size of training data]
+ * @param gamma           [learning rate]
+ * @param alpha           [regularization rate]
+ * @param epochs          [number of epochs]
+ * @param input_data_size [size of first layer]
+ * @param test_size       [size of testing dataset]
+ */
 void ANN::sgd(float **training_data, float* training_labels, float **testing_data, float* testing_labels, int size, float gamma, float alpha, int epochs, int input_data_size, int test_size) {
 
 	int data_idx, label_idx, stream_idx, batch_start_idx, label_start_idx;
 
+	// Timing purposes
 	float time;
 	cudaEvent_t start, stop;
 
+	// Create streams
 	cudaStream_t s[sb_count];
 	for (int i = 0; i < sb_count; i++) {
 		cudaStreamCreate(&s[i]);
 	}
 
 
+	// Begin epochs
 	for (int epoch = 0; epoch < epochs; epoch++) {
 
 		cudaEventCreate(&start);
 		cudaEventCreate(&stop);
 		cudaEventRecord(start, 0);
 
+		// Iterate training set
 		for (int i = 0; i < size; i++) {
 
 			// Get input data index
@@ -276,17 +337,19 @@ void ANN::sgd(float **training_data, float* training_labels, float **testing_dat
 			float *image = training_data[i];
 			float label = training_labels[i];
 
-			// Fill buffers
+			// Fill buffers for current stream
 			this->labels[label_idx] = label;
 			std::memcpy(&this->input_host[data_idx], image, sizeof(float) * (this->shape[0]));
 
 			// Start processing batch
 			if (i % batch_size == batch_size - 1) {
 
+				// Calculate indices
 				stream_idx = (i / batch_size) % sb_count;
 				batch_start_idx = stream_idx * batch_size * input_data_size;
 				label_start_idx = stream_idx * batch_size;
 
+				// Copy over a batch of training data to input_layers and output_layers
 				gpuErrChk(
 				    cudaMemcpyAsync(&input_layers[batch_start_idx],
 				                    &this->input_host[batch_start_idx],
@@ -308,14 +371,17 @@ void ANN::sgd(float **training_data, float* training_labels, float **testing_dat
 					}
 				}
 
+				// Gradient update for each sample in the batch
 				for (int x = 0; x < batch_size; x++) {
 
+					// Get the index of the current sample to be trained on
 					int index = batch_start_idx + x * input_data_size;
 					int l_idx = label_start_idx + x;
 
 					this->feedforward(index, s[stream_idx]);
 					this->backpropogate(this->labels[l_idx], index, s[stream_idx]);
 
+					// Update weights
 					for (int layer = 0; layer < this->layer_count - 1; layer++) {
 
 						int curr_bias_index = this->bias_index[layer];
@@ -355,12 +421,20 @@ void ANN::sgd(float **training_data, float* training_labels, float **testing_dat
 		printf("Epoch %d: %.3f\n", epoch, (float) correct / (float) test_size);
 	}
 
+	// Destroy streams
 	for (int i = 0; i < sb_count; i++) {
         cudaStreamSynchronize(s[i]);
         cudaStreamDestroy(s[i]);
     }
 }
 
+/**
+ * CPU feedforward algorithm. Used for evaluation step.
+ * 
+ * @param  input_data [test sample]
+ * @param  size       [size of first layer]
+ * @return            [prediction array]
+ */
 float* ANN::cpu_feedforward(float *input_data, int size) {
 
 	float *host_input_layer = this->eval_input;
@@ -397,6 +471,15 @@ float* ANN::cpu_feedforward(float *input_data, int size) {
 	return &host_output_layer[this->normal_io_index[this->layer_count - 1]];
 }
 
+/**
+ * Evaluation function.  
+ * 
+ * @param  testing_data    [set of training data]
+ * @param  testing_labels  [testing label set]
+ * @param  size            [size of test set]
+ * @param  input_data_size [size of first layer]
+ * @return                 [sum of correctly classified samples]
+ */
 int ANN::evaluate(float **testing_data, float *testing_labels, int size, int input_data_size) {
 	int sum = 0;
 
@@ -447,8 +530,8 @@ int main(int argc, char const *argv[]) {
 	ANN *ann = new ANN(shape, size);
 	ann->sgd(trainImagedata, trainLabeldata, testImagedata, testLabeldata, 60000, 0.05, 1e-10, 10, 784, 10000);
 
-	// delete ann;
-	// delete [] shape;
+	delete ann;
+	delete [] shape;
 
 	return 0;
 }

@@ -17,6 +17,7 @@
 
 using namespace std;
 
+
 float** read_mnist_images(string full_path, int number_of_images, int image_size) {
     auto reverseInt = [](int i) {
         unsigned char c1, c2, c3, c4;
