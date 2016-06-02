@@ -61,7 +61,7 @@ The error rates acheived by the network after 10 epochs on the default setting w
 The computation time used for one epoch (a full pass over the training set) is shown for GPU and CPU code of the same layer size and structure.
 
 |Layer Structure				| GPU	| CPU  |
-|----------------------------------------------|
+|-------------------------------|-------|------|
 |[784, 300, 10]					| 28.5s | 32.0s|
 |[784, 300, 300, 10]			| 42.5s | 44.3s|
 |[784, 800, 300, 300, 10]		| 120s	| 136s |
