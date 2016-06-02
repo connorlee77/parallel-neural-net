@@ -41,7 +41,7 @@ inline void gpuAssert(
 unsigned int blocks = 512;
 unsigned int threads = 200;
 const int sb_count = 8;
-const int batch_size = 8;
+const int batch_size = 150;
 /**
 	 * @param shape					array 	[input, hidden ... , output]
 	 * @param layer_count			int 	layer count
@@ -181,8 +181,6 @@ float* ANN::feedforward(int data_idx, cudaStream_t s) {
 		int prev_weight_index = this->weight_index[i - 1];
 		int prev_bias_index = this->bias_index[i - 1];
 
-		gpuErrChk( cudaMemset(&input_layer[curr_io_index], 0, sizeof(float) * (this->shape[i])) );
-
 		if (i == 1) {
 			dotVectorToMatrix(blocks, threads, &input_layer[curr_io_index], &output_layer[data_idx], &this->weights[prev_weight_index], this->shape[i - 1], this->shape[i - 1], this->shape[i], s);
 		} else {
@@ -253,6 +251,9 @@ void ANN::sgd(float **training_data, float* training_labels, float **testing_dat
 
 	int data_idx, label_idx, stream_idx, batch_start_idx, label_start_idx;
 
+	float time;
+	cudaEvent_t start, stop;
+
 	cudaStream_t s[sb_count];
 	for (int i = 0; i < sb_count; i++) {
 		cudaStreamCreate(&s[i]);
@@ -260,6 +261,10 @@ void ANN::sgd(float **training_data, float* training_labels, float **testing_dat
 
 
 	for (int epoch = 0; epoch < epochs; epoch++) {
+
+		cudaEventCreate(&start);
+		cudaEventCreate(&stop);
+		cudaEventRecord(start, 0);
 
 		for (int i = 0; i < size; i++) {
 
@@ -340,6 +345,10 @@ void ANN::sgd(float **training_data, float* training_labels, float **testing_dat
 				printf("%d\n", i);
 		}
 
+		cudaEventRecord(stop, 0);
+		cudaEventSynchronize(stop);
+		cudaEventElapsedTime(&time, start, stop);
+		printf("Epoch time:  %3.1f ms \n", time);
 		int correct = this->evaluate(testing_data, testing_labels, test_size, input_data_size);
 		gamma *= 0.99;
 		alpha *= 0.99;

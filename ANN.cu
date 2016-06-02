@@ -12,14 +12,14 @@ void callDotVectorToMatrix(float *ans, float *vector, float *matrix, int w_row_d
 
 	int i = threadIdx.x + blockDim.x * blockIdx.x;
 
-	while(i < w_row_dim) {
+	while(i < w_col_dim) {
 
-		float x_elem = vector[i];
-
-		for(int col = 0; col < w_col_dim; col++) {
-			float addend = x_elem * matrix[i * w_col_dim + col];
-			atomicAdd(&ans[col], addend);
+		float sum = 0.0;
+		for(int row = 0; row < w_row_dim; row++) {
+			sum += vector[row] * matrix[row * w_col_dim + i];
 		}
+
+		ans[i] = sum;
 
 		i += blockDim.x * gridDim.x;
 	}
@@ -56,28 +56,6 @@ void addVectors(unsigned int maxBlocks, unsigned int threadsPerBlock, float *out
 
 
 
-__global__
-void callSigmoid(float *output, float *input, int size) {
-	int i = threadIdx.x + blockDim.x * blockIdx.x;
-
-	while(i < size) {
-		output[i] = 1.0 / (1.0 + exp(-input[i])); 
-
-		i += blockDim.x * gridDim.x;
-	}
-}
-
-void sigmoid(unsigned int maxBlocks, unsigned int threadsPerBlock, float *output, float *input, int size, cudaStream_t stream) {
-	callSigmoid<<<maxBlocks, threadsPerBlock, 0, stream>>>(output, input, size);
-}
-
-
-
-
-
-
-
-
 
 
 /**
@@ -92,7 +70,8 @@ void callCalculateDeltas(float *ans, float *vector, float *matrix, float *input,
 	while(i < w_row_dim) {
 
 		// Compute delta_{i+1} * W^T
-		float sum = 0;
+		
+		float sum = 0.0;
 		for (int col = 0; col < w_col_dim; col++) {
 			sum += vector[col] * matrix[i * w_col_dim + col];
 		}
@@ -122,24 +101,34 @@ void calculateDeltas(unsigned int maxBlocks,
 __global__
 void callDotVectorTransposeToVector(float *ans, float *vector1, float *vector2, float *delta_b, int col_dim1, int col_dim2) {
 
-	int i1 = threadIdx.x + blockDim.x * blockIdx.x;
+	unsigned int i = threadIdx.x + blockDim.x * blockIdx.x;
+	unsigned int x = threadIdx.x;
+	int v1_idx, v2_idx;
+	float v2_temp;
 
-	while (i1 < col_dim1) {
+	extern __shared__ float v2[];
 
-		float v1 = vector1[i1];
+	while(x < col_dim2) {
 
-		for (int i2 = 0; i2 < col_dim2; i2++) {
+		v2[x] = vector2[x];
+		x += blockDim.x;
+	}
 
-			float v2 = vector2[i2];
-			ans[i1 * col_dim2 + i2] = v1 * v2;
+	__syncthreads();
 
-			// Copy only once
-			if (i1 == 0) {
-				delta_b[i2] = v2;
-			}
+	while(i < col_dim1 * col_dim2) {
+
+		v1_idx = (i / col_dim2) % col_dim1;
+		v2_idx = i % col_dim2;
+		v2_temp = v2[v2_idx];
+
+		ans[i] = vector1[v1_idx] * v2_temp;
+
+		if (i < col_dim2) {
+			delta_b[i] = v2_temp;
 		}
 
-		i1 += blockDim.x * gridDim.x;
+		i += blockDim.x * gridDim.x;
 	}
 }
 
@@ -150,7 +139,7 @@ void dotVectorTransposeToVector(unsigned int maxBlocks,
 	float *vector2, float *delta_b,
 	int col_dim1, int col_dim2, cudaStream_t stream) {
 
-	callDotVectorTransposeToVector<<<maxBlocks, threadsPerBlock, 0, stream>>>(ans, vector1, vector2, delta_b, col_dim1, col_dim2);
+	callDotVectorTransposeToVector<<<maxBlocks, threadsPerBlock, col_dim2 * sizeof(float), stream>>>(ans, vector1, vector2, delta_b, col_dim1, col_dim2);
 }
 
 
@@ -187,10 +176,10 @@ void callUpdateWeights(float *weights, float gamma, float *delta_weights, int ro
 
 	int i = threadIdx.x + blockDim.x * blockIdx.x;
 
-	while(i < row_dim) {
-		for (int col = 0; col < col_dim; col++) {
-			weights[i * col_dim + col] -= gamma * delta_weights[i * col_dim + col] - alpha * weights[i * col_dim + col]; 
-		}
+	while(i < row_dim * col_dim) {
+
+		float w = weights[i];
+		weights[i] = w - gamma * delta_weights[i] - alpha * w; 
 
 		i += blockDim.x * gridDim.x;
 	}
